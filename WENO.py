@@ -1,15 +1,17 @@
+import tqdm
 import numpy as np
 from typing import List
 # 1D dimension
 class WENO1D:
 
-    def __init__(self, mesh: np.ndarray, avg_values: np.ndarray, order=5) -> None:
+    def __init__(self, mesh: np.ndarray, avg_values: np.ndarray, k: int =5) -> None:
         """初始化WENO类
 
         Args:
             mesh (np.ndarray): 网格剖分[lb,...ub]
             avg_values (np.ndarray): 网格剖分[lb,...ub]
-            order (int, optional): WENO算法阶数. Defaults to 5.
+            k (int, optional): 模板长度. Defaults to 3.
+            Supported k=1, 2, 3, 5
         """
         assert np.size(mesh) - 1 == np.size(
             avg_values
@@ -17,17 +19,21 @@ class WENO1D:
         self.avg_values = avg_values
         self.mesh = mesh
 
-        self.order = order
+        self.order = 2 * k - 1
         self.lb = mesh[0]
         self.ub = mesh[-1]
         self.N = len(mesh) - 1  # Num of cells
-        self.k = int((order + 1) / 2)  # Num of stencils
+        self.k = k  # Num of stencils
+
+        self._solution = np.zeros(self.N + 1)  # 存储WENO重构结果
+        self.stencil_solution = np.zeros(self.N + 1)  # 存储模板重构结果
+
         # 查表得到模板组合线性权
-        if order == 1:
+        if self.order == 1:
             self.weights_d = [1]
-        elif order == 3:
+        elif self.order == 3:
             self.weights_d = [2 / 3, 1 / 3]
-        elif order == 5:
+        elif self.order == 5:
             self.weights_d = [1 / 10, 3 / 5, 3 / 10]
             # 查表得到模板组合系数
             self.C = np.array(
@@ -38,8 +44,28 @@ class WENO1D:
                     [11 / 6, -7 / 6, 1 / 3],
                 ]
             )
+        elif self.order == 9:
+            # 直接得到五阶模板 加权可以得到九阶模板
+            self.weights_d = np.ones(5) / 5  # 书上没有对应权重 暂时求平均处理
+            self.C = np.array(
+                [
+                    [1/5, -21/20, 137/60, -163/60, 137/60],
+                    [-1/20, 17/60, -43/60, 77/60, 1/5],
+                    [1/30, -13/60, 47/60, 9/20, -1/20],
+                    [-1/20, 9/20, 47/60, -13/60, 1/30],
+                    [1/5, 77/60, -43/60, 17/60, -1/20],
+                    [137/60, -163/60, 137/60, -21/20, 1/5]
+                ]
+            )
         else:
-            raise ValueError("order must be 1, 2 or 3")  # 其他阶的系数论文没给，先不写
+            raise ValueError("k must be 1, 2 or 3, 5(测试五阶算法用)")  # 其他阶的系数论文没给，先不写
+        
+        self.PrintInfo()
+
+    def PrintInfo(self):
+        print(f"lb = {self.lb}, ub = {self.ub}, num of Nodes = {self.N + 1}")
+        print(f"Num of cells = {self.N}, Stencil length = {self.k}\n")
+
 
     def StencilReconstruct(self, index: int) -> List[float]:
         """根据模板进行重构 精度为k阶
@@ -75,7 +101,6 @@ class WENO1D:
                     self.avg_values[stencil_index - self.k + 1 : stencil_index + 1],
                 )
         return stencil_recons
-
 
     def SmoothIndicators(self, index: int) -> np.ndarray:
         """计算指示器
@@ -154,8 +179,8 @@ class WENO1D:
             alpha[i] = self.weights_d[i] / (eps + beta[i]) ** 2
         return alpha / np.sum(alpha)
 
-    def WENOReconstruct(self, index: int, eps=1e-6) -> float:
-        """WENO加权后的重构 精度为2k-1阶
+    def NodeReconstruct(self, index: int, eps=1e-6) -> float:
+        """WENO加权后的重构 精度为2k-1阶 针对节点进行重构
 
         Args:
             index (int): 索引
@@ -166,6 +191,26 @@ class WENO1D:
         """
         weights = self.FormWeights(index, eps=eps)
         return np.inner(self.weights_d, self.StencilReconstruct(index))
+
+    def Reconstruct(self, eps=1e-6):
+        """WENO加权后的重构 精度为2k-1阶 针对区间进行重构
+
+        Args:
+            eps (_type_, optional): eps参数. Defaults to 1e-6.
+        """
+        for i in tqdm.tqdm(range(self.N + 1)):
+            self._solution[i] = self.NodeReconstruct(i, eps=eps)
+        return self._solution
+
+    def StencilReconstruct_all(self) -> np.ndarray:
+        """精度为2k-1阶 调用StencilReconstruct 针对区间进行重构
+
+        Returns:
+            np.ndarray: 重构结果
+        """
+        for i in range(self.N + 1):
+            self.stencil_solution[i] = np.inner(self.weights_d, self.StencilReconstruct(i))
+        return self.stencil_solution
 
 
 class Mesh:
@@ -200,6 +245,3 @@ class Mesh:
         for i in range(self.N):
             integrate = np.exp(self.mesh[i + 1]) - np.exp(self.mesh[i])
             self.avg_values[i] = integrate / (self.mesh[i + 1] - self.mesh[i])
-
-
-

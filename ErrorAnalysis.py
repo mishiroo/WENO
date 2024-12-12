@@ -78,6 +78,9 @@ def SaveError(
     }
     df = pd.DataFrame(data)
     df.to_excel(fn, index=False)
+    # 打印误差
+    print(f"l2 err accuracy order: {ac_orders_l2}")
+    print(f"linf err accuracy order: {ac_orders_linf}")
 
 
 def L2Error(analytical: List[float], numerical: List[float]) -> float:
